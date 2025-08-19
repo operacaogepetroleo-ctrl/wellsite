@@ -1,0 +1,34 @@
+
+services:
+  - type: web
+    name: wellsite-backend
+    env: python
+    plan: free
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "gunicorn -w 2 -k gthread -b 0.0.0.0:$PORT 'backend.app:create_app'"
+    autoDeploy: true
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: SECRET_KEY
+        generateValue: true
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: LOG_DIR
+        value: /var/data/logs
+      - key: CORS_ORIGINS
+        value: https://your-frontend-domain, http://localhost:5173
+
+  # - type: web
+  #   name: wellsite-frontend
+  #   env: static
+  #   buildCommand: "npm --prefix frontend install && npm --prefix frontend run build"
+  #   staticPublishPath: frontend/dist

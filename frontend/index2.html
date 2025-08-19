@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WellSite — Cadastro de Poços (com IA)</title>
+  <style>
+    :root{--b:#111;--bg:#fafafa;--pri:#0a66ff}
+    body{font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);margin:22px}
+    .wrap{display:grid;grid-template-columns:520px 1fr;gap:18px;align-items:start}
+    .card{background:#fff;border:1px solid #e8e8e8;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+    label{font-weight:600;display:block;margin:.25rem 0}
+    input[type="text"],input[type="number"],textarea,select{width:100%;padding:8px 10px;border:1px solid #ccc;border-radius:8px;background:#fff}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #111;background:#111;color:#fff;cursor:pointer}
+    button.secondary{background:#fff;color:#111}
+    button.active{background:var(--pri);border-color:var(--pri)}
+    img{max-width:100%;border:1px solid #eee;border-radius:8px;display:block}
+    .grid{display:grid;gap:10px}
+    .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .coords{display:grid;grid-template-columns:140px repeat(5, 1fr) 70px;gap:6px;align-items:center}
+    .mini{font-size:12px;color:#666}
+    .mono{font-family:ui-monospace,Consolas,Menlo,monospace;white-space:pre-wrap}
+
+    /* Canvas de edição (overlay) */
+    .canvas{position:relative;display:inline-block;width:100%}
+    #templatePreview{width:100%;height:auto}
+    #overlay{position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none}
+    #overlay.editing{pointer-events:auto}
+    .field-box{
+      position:absolute;border:1.25px dashed var(--pri);
+      background:rgba(10,102,255,.08);border-radius:6px;
+      color:#0a2d66;cursor:move;user-select:none;
+      box-shadow:0 0 0 1px rgba(10,102,255,.1) inset;
+    }
+    .field-box .tag{
+      position:absolute;left:0;top:-18px;transform:translateY(-2px);
+      font-size:10px;background:rgba(0,0,0,.65);color:#fff;
+      padding:1px 4px;border-radius:3px;white-space:nowrap;
+    }
+    .field-box .handle{
+      position:absolute;right:-6px;bottom:-6px;width:12px;height:12px;
+      background:var(--pri);border-radius:50%;cursor:nwse-resize;border:2px solid #fff;
+      box-shadow:0 0 0 1px rgba(0,0,0,.15);
+    }
+  </style>
+</head>
+<body>
+  <h1>WellSite — Cadastro de Poços (com IA)</h1>
+  <div class="row">
+    <button id="btnTest" class="secondary">Testar conexão</button>
+    <button id="btnAI" class="secondary">Preencher com IA</button>
+    <select id="provider">
+      <option value="openai">OpenAI (API)</option>
+      <option value="ollama">Ollama (local)</option>
+    </select>
+    <button id="btnEdit" class="secondary">Editar posições (arrastar)</button>
+    <button id="btnShowJSON" class="secondary">Mostrar JSON da IA</button>
+    <button id="btnValidate" class="secondary">Validar nomes</button>
+  </div>
+
+  <div class="wrap">
+    <div class="card grid">
+      <div>
+        <label>Template (PNG/JPG)</label>
+        <div class="canvas">
+          <img id="templatePreview" alt="preview" />
+          <div id="overlay"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <input type="file" id="templateFile" accept="image/*" />
+          <span class="mini">Pré-visualização com caixas arrastáveis.</span>
+        </div>
+      </div>
+
+      <div class="grid">
+        <label>PDF do relatório</label>
+        <input type="file" id="pdfFile" accept="application/pdf" />
+        <div class="mini">Você também pode colar texto manualmente no campo abaixo.</div>
+        <textarea id="manualText" rows="6" placeholder="Cole aqui o texto do PDF (opcional)"></textarea>
+      </div>
+
+      <div class="grid">
+        <label>Campos (valores)</label>
+        <div id="valuesForm" class="grid"></div>
+      </div>
+
+      <div class="grid">
+        <label>Coordenadas (nome, x, y, w, h, fonte)</label>
+        <div id="coordsForm" class="grid"></div>
+        <button id="btnAddField" class="secondary" type="button">+ campo</button>
+      </div>
+
+      <div class="row">
+        <button id="btnGenerate" type="button">Gerar PNG</button>
+        <button id="btnDownload" class="secondary" type="button" disabled>Baixar PNG</button>
+        <button id="btnPDF" class="secondary" type="button">Gerar PDF</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Resultado / Log</h3>
+      <div id="meta" class="mini"></div>
+      <pre id="log" class="mono mini"></pre>
+      <img id="result" alt="saida" />
+    </div>
+  </div>
+
+<script>
+const API = 'http://127.0.0.1:8000';
+const SCHEMA = [
+  "well_name","kb_offset",
+  "casing_od","casing_weight","casing_top","casing_bottom",
+  "tubing_od","tubing_weight","tubing_top","tubing_bottom","tubing_avg_joint_length",
+  "rod_string","tubing_anchor","pc_pump_depth",
+  "perforation_top","perforation_bottom","plugback"
+];
+
+// PRESET COMPLETO — posições recomendadas (template ~1024x1024)
+const DEFAULT_FIELDS = [
+  {name:"well_name", x:120, y:86,  w:480, h:36, font_size:26, border:true},
+  {name:"kb_offset", x:420, y:212, w:120, h:26, font_size:18, border:true},
+
+  {name:"casing_od",      x:184, y:367, w:80,  h:24, font_size:16, border:true},
+  {name:"casing_weight",  x:184, y:394, w:80,  h:24, font_size:16, border:true},
+  {name:"casing_top",     x:184, y:420, w:80,  h:24, font_size:16, border:true},
+  {name:"casing_bottom",  x:184, y:446, w:80,  h:24, font_size:16, border:true},
+
+  {name:"tubing_od",               x:950, y:368, w:80,  h:24, font_size:16, border:true},
+  {name:"tubing_weight",           x:950, y:394, w:80,  h:24, font_size:16, border:true},
+  {name:"tubing_top",              x:950, y:420, w:80,  h:24, font_size:16, border:true},
+  {name:"tubing_bottom",           x:950, y:446, w:80,  h:24, font_size:16, border:true},
+  {name:"tubing_avg_joint_length", x:950, y:472, w:120, h:24, font_size:16, border:true},
+
+  {name:"rod_string",      x:540, y:580, w:160, h:26, font_size:16, border:true},
+  {name:"tubing_anchor",   x:320, y:690, w:160, h:26, font_size:16, border:true},
+  {name:"pc_pump_depth",   x:830, y:720, w:120, h:26, font_size:16, border:true},
+  {name:"perforation_top",    x:960, y:820, w:120, h:26, font_size:16, border:true},
+  {name:"perforation_bottom", x:960, y:850, w:120, h:26, font_size:16, border:true},
+  {name:"plugback",        x:360, y:880, w:160, h:26, font_size:16, border:true},
+];
+
+// estado
+const valuesState = {};
+const coordsState = JSON.parse(JSON.stringify(DEFAULT_FIELDS));
+
+function el(tag, attrs={}, children=[]) {
+  const e = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k==='class') e.className=v; else e.setAttribute(k,v);
+  }
+  for (const c of (children||[])) e.appendChild(typeof c==='string'? document.createTextNode(c): c);
+  return e;
+}
+
+function renderForms() {
+  // valores
+  const v = document.getElementById('valuesForm'); v.innerHTML='';
+  SCHEMA.forEach(name => {
+    const i = el('input', {type:'text', placeholder:name, value: valuesState[name]||''});
+    i.addEventListener('input', e => valuesState[name]=e.target.value);
+    v.appendChild(el('div', {}, [el('label', {}, [name]), i]));
+  });
+  // coords
+  const c = document.getElementById('coordsForm'); c.innerHTML='';
+  coordsState.forEach((f,idx)=>{
+    const row = el('div', {class:'coords'});
+    const name = el('input', {type:'text', value:f.name}); name.addEventListener('input', e=>{f.name=e.target.value; refreshOverlay();});
+    const x = el('input', {type:'number', value:f.x}); x.addEventListener('input', e=>{f.x=parseFloat(e.target.value||0); refreshOverlay();});
+    const y = el('input', {type:'number', value:f.y}); y.addEventListener('input', e=>{f.y=parseFloat(e.target.value||0); refreshOverlay();});
+    const w = el('input', {type:'number', value:f.w}); w.addEventListener('input', e=>{f.w=parseFloat(e.target.value||0); refreshOverlay();});
+    const h = el('input', {type:'number', value:f.h}); h.addEventListener('input', e=>{f.h=parseFloat(e.target.value||0); refreshOverlay();});
+    const fs = el('input', {type:'number', value:f.font_size}); fs.addEventListener('input', e=>f.font_size=parseFloat(e.target.value||0));
+    const rm = el('button', {type:'button'}, ['x']); rm.addEventListener('click', ()=>{ coordsState.splice(idx,1); renderForms(); refreshOverlay(); });
+    row.append(name,x,y,w,h,fs,rm);
+    c.appendChild(row);
+  });
+}
+renderForms();
+
+// arquivos
+let templateBase64 = "", pdfBase64 = "";
+const templatePreview = document.getElementById('templatePreview');
+document.getElementById('templateFile').addEventListener('change', (e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader(); r.onload=()=>{ templateBase64=r.result; templatePreview.src=templateBase64; }; r.readAsDataURL(f);
+});
+templatePreview.addEventListener('load', refreshOverlay);
+
+document.getElementById('pdfFile').addEventListener('change', (e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader(); r.onload=()=>{ pdfBase64=r.result; }; r.readAsDataURL(f);
+});
+
+function log(msg){ document.getElementById('log').textContent = msg; }
+function meta(msg){ document.getElementById('meta').textContent = msg; }
+
+// Teste
+document.getElementById('btnTest').addEventListener('click', async ()=>{
+  try{ const r=await fetch(API+'/health'); const j=await r.json(); log('Health: '+JSON.stringify(j)); }catch(e){ log('Falha no health: '+e); }
+});
+
+// IA
+let _lastAI = null;
+document.getElementById('btnAI').addEventListener('click', async ()=>{
+  try{
+    const provider=document.getElementById('provider').value;
+    const manual=document.getElementById('manualText').value.trim();
+    const body = manual? {text:manual,provider} : pdfBase64? {pdf_base64:pdfBase64,provider,max_pages:2} : null;
+    if(!body){ alert('Envie o PDF ou cole um texto.'); return; }
+    const res=await fetch(API+'/api/ai_extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const data=await res.json();
+    if(!data.ok){ log('Falha IA: '+(data.error||res.status)); return; }
+    Object.assign(valuesState, data.values||{});
+    renderForms();
+    meta(`Provider: ${data.provider} | método: ${data.meta?.method} | chars: ${data.meta?.length}`);
+    log('Campos preenchidos pela IA.');
+    _lastAI = data;
+  }catch(e){ log('Erro IA: '+e.message); }
+});
+
+// Debug helpers
+document.getElementById('btnShowJSON').addEventListener('click', ()=>{
+  if(!_lastAI){ log('Ainda não há resultado da IA.'); return; }
+  log(JSON.stringify(_lastAI, null, 2));
+});
+document.getElementById('btnValidate').addEventListener('click', ()=>{
+  const formKeys = new Set(SCHEMA);
+  const missing = [];
+  const extra = [];
+  for(const f of coordsState){
+    if(!formKeys.has(f.name)) missing.push(f.name);
+  }
+  for(const k of formKeys){
+    if(!coordsState.find(f => f.name === k)) extra.push(k);
+  }
+  log(`Coordenadas sem campo correspondente: ${missing.length? missing.join(', '): 'nenhuma'}\n` +
+      `Campos sem coordenada: ${extra.length? extra.join(', '): 'nenhum'}`);
+});
+
+// ===== Overlay: drag & resize =====
+const overlay = document.getElementById('overlay');
+let editing=false;
+document.getElementById('btnEdit').addEventListener('click', ()=>{
+  editing = !editing;
+  overlay.classList.toggle('editing', editing);
+  document.getElementById('btnEdit').classList.toggle('active', editing);
+  refreshOverlay();
+});
+
+function getScale(){
+  const natW = templatePreview.naturalWidth || 1024;
+  const natH = templatePreview.naturalHeight || 1024;
+  const dispW = templatePreview.clientWidth;
+  const dispH = templatePreview.clientHeight;
+  return {sx: dispW/natW, sy: dispH/natH, dispW, dispH};
+}
+
+function refreshOverlay(){
+  overlay.style.display = templatePreview.src ? 'block' : 'none';
+  const {sx, sy, dispW, dispH} = getScale();
+  overlay.style.width = dispW+'px';
+  overlay.style.height = dispH+'px';
+  overlay.innerHTML='';
+  coordsState.forEach((f,idx)=>{
+    const box = document.createElement('div');
+    box.className='field-box';
+    box.style.left = (f.x*sx)+'px';
+    box.style.top  = (f.y*sy)+'px';
+    box.style.width  = (f.w*sx)+'px';
+    box.style.height = (f.h*sy)+'px';
+    box.dataset.idx = idx;
+
+    const tag = document.createElement('div');
+    tag.className='tag';
+    tag.textContent = f.name;
+    box.appendChild(tag);
+
+    const handle = document.createElement('div');
+    handle.className='handle';
+    box.appendChild(handle);
+
+    if(editing){
+      // drag move
+      box.addEventListener('mousedown', startDragMove);
+      // resize
+      handle.addEventListener('mousedown', startResize);
+    }
+    overlay.appendChild(box);
+  });
+}
+
+let dragState=null;
+function startDragMove(ev){
+  if(ev.target.classList.contains('handle')) return;
+  ev.preventDefault();
+  const idx = +ev.currentTarget.dataset.idx;
+  const start = coordsState[idx];
+  const {sx, sy} = getScale();
+  dragState = {
+    type:'move', idx,
+    startMouseX: ev.clientX, startMouseY: ev.clientY,
+    startX: start.x, startY: start.y,
+    sx, sy
+  };
+  window.addEventListener('mousemove', onDrag);
+  window.addEventListener('mouseup', endDrag);
+}
+
+function startResize(ev){
+  ev.stopPropagation(); ev.preventDefault();
+  const idx = +ev.currentTarget.parentElement.dataset.idx;
+  const start = coordsState[idx];
+  const {sx, sy} = getScale();
+  dragState = {
+    type:'resize', idx,
+    startMouseX: ev.clientX, startMouseY: ev.clientY,
+    startW: start.w, startH: start.h,
+    sx, sy
+  };
+  window.addEventListener('mousemove', onDrag);
+  window.addEventListener('mouseup', endDrag);
+}
+
+function onDrag(ev){
+  if(!dragState) return;
+  const dx = (ev.clientX - dragState.startMouseX);
+  const dy = (ev.clientY - dragState.startMouseY);
+  const f = coordsState[dragState.idx];
+  if(dragState.type==='move'){
+    f.x = Math.max(0, dragState.startX + dx/dragState.sx);
+    f.y = Math.max(0, dragState.startY + dy/dragState.sy);
+  }else{
+    f.w = Math.max(10, dragState.startW + dx/dragState.sx);
+    f.h = Math.max(10, dragState.startH + dy/dragState.sy);
+  }
+  refreshOverlay();
+  // também reflete nos inputs
+  renderForms();
+}
+
+function endDrag(){
+  window.removeEventListener('mousemove', onDrag);
+  window.removeEventListener('mouseup', endDrag);
+  dragState=null;
+}
+
+window.addEventListener('resize', refreshOverlay);
+
+// Gerar
+async function doGenerate(endpoint){
+  if(!templateBase64){ alert('Envie o template primeiro.'); return; }
+  const w=templatePreview.naturalWidth||1024, h=templatePreview.naturalHeight||1024;
+  const payload={ template_base64: templateBase64, values: valuesState, fields: coordsState, image_size:[w,h] };
+  const res=await fetch(API+endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!res.ok){ const t=await res.text(); throw new Error(`HTTP ${res.status}: ${t}`); }
+  return res.json();
+}
+
+document.getElementById('btnGenerate').addEventListener('click', async ()=>{
+  try{ const d=await doGenerate('/api/generate'); if(d.image_base64){ document.getElementById('result').src=d.image_base64; window._lastImage=d.image_base64; document.getElementById('btnDownload').disabled=false; log('Imagem gerada.'); } }
+  catch(e){ log('Erro: '+e.message); }
+});
+
+document.getElementById('btnPDF').addEventListener('click', async ()=>{
+  try{ const j=await doGenerate('/api/generate_pdf'); if(j.pdf_base64){ const a=document.createElement('a'); a.href=j.pdf_base64; a.download='saida.pdf'; a.click(); log('PDF gerado.'); } }
+  catch(e){ log('Falha ao gerar PDF: '+e.message); }
+});
+
+document.getElementById('btnDownload').addEventListener('click', ()=>{
+  if(!window._lastImage) return;
+  const a=document.createElement('a'); a.href=window._lastImage; a.download='saida.png'; a.click();
+});
+
+document.getElementById('btnAddField').addEventListener('click', ()=>{
+  coordsState.push({name:"novo_campo",x:100,y:100,w:120,h:26,font_size:16,border:true});
+  renderForms();
+  refreshOverlay();
+});
+</script>
+</body>
+</html>

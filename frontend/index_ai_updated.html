@@ -1,0 +1,444 @@
+
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>WellSite — Cadastro de Poços (AI)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --brand:#223873;        /* azul-escuro predominante */
+      --brand-2:#1b2b57;
+      --bg:#0f172a;
+      --card:#0b1022;
+      --muted:#93a3c3;
+      --ok:#15b374;
+      --warn:#ffb020;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Liberation Sans', sans-serif;
+      color:#e6ecff;background:linear-gradient(180deg,#0a1024 0,#070b19 100%);
+    }
+    header{
+      position:sticky; top:0; z-index:8;
+      background:linear-gradient(90deg,var(--brand),var(--brand-2));
+      box-shadow:0 6px 24px rgba(0,0,0,.35);
+    }
+    .nav{
+      max-width:1300px; margin:auto; display:flex; align-items:center; gap:16px;
+      padding:14px 18px;
+    }
+    .nav img.logo{height:42px; width:auto; display:block; filter: drop-shadow(0 2px 6px rgba(0,0,0,.35));}
+    .nav h1{font-size:18px; margin:0; font-weight:600; letter-spacing:.3px}
+    .pill{margin-left:auto; display:flex; gap:8px; flex-wrap:wrap}
+    .pill button,.pill a.btn{
+      appearance:none; border:1px solid rgba(255,255,255,.2); border-radius:10px;
+      padding:10px 12px; background:rgba(255,255,255,.08); color:#fff; cursor:pointer;
+      transition:.2s; text-decoration:none;
+    }
+    .pill button:hover,.pill a.btn:hover{background:rgba(255,255,255,.16)}
+
+    .wrap{max-width:1300px; margin:22px auto; padding:0 18px; display:grid; grid-template-columns:370px 1fr; gap:18px}
+    .card{background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.08); border-radius:14px; overflow:hidden}
+    .card h3{margin:0; padding:12px 14px; background:rgba(255,255,255,.04); border-bottom:1px solid rgba(255,255,255,.06); font-size:15px; letter-spacing:.2px}
+    .card .body{padding:14px}
+    label{display:block; font-size:12px; color:#a9b7df; margin:10px 0 6px}
+    input[type="text"], input[type="number"], textarea{
+      width:100%; padding:10px 12px; background:#0c1330; border:1px solid rgba(255,255,255,.12);
+      border-radius:10px; color:#e9f0ff; outline:none; transition:.15s;
+    }
+    input:focus, textarea:focus{border-color:#5e8bff; box-shadow:0 0 0 3px rgba(94,139,255,.12)}
+    textarea{min-height:120px; resize:vertical}
+
+    .btn-row{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px}
+    .btn{appearance:none; cursor:pointer; border-radius:10px; padding:10px 12px; border:1px solid rgba(255,255,255,.15); background:rgba(255,255,255,.08); color:#fff}
+    .btn.ok{border-color:rgba(21,179,116,.25); background:rgba(21,179,116,.14)}
+    .btn.warn{border-color:rgba(255,176,32,.25); background:rgba(255,176,32,.14)}
+    .btn.ghost{background:transparent}
+    .muted{color:#92a0c9; font-size:12px}
+
+    /* Preview + overlay */
+    .stage{position:relative; background:#0b1022; border-left:1px solid rgba(255,255,255,.08); border-top:1px solid rgba(255,255,255,.08);
+           border-radius:14px; overflow:hidden}
+    .toolbar{display:flex; gap:8px; align-items:center; padding:10px; border-bottom:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.03)}
+    canvas{display:block; width:100%; background:#0b1022}
+    .badge{display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12); font-size:12px}
+    .status{margin-left:auto; font-size:12px; color:#bcd}
+
+    /* Draggable anchors for edit mode */
+    .anchor{position:absolute; border:1px dashed rgba(255,255,255,.35); background:rgba(255,255,255,.06); color:#fff;
+            font-size:12px; padding:2px 6px; border-radius:8px; cursor:move; user-select:none; }
+    .anchor .name{opacity:.9}
+    .anchor .xy{display:block; font-size:10px; color:#cfe; opacity:.75}
+    .hidden{display:none !important}
+    .code{white-space:pre-wrap; background:#0b1022; border-radius:10px; border:1px dashed rgba(255,255,255,.15); padding:10px; font-size:12px}
+
+    @media (max-width:980px){
+      .wrap{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="nav">
+      <img class="logo" src="logo.png" alt="Logo" onerror="this.style.display='none'">
+      <h1>WellSite — Cadastro de Poços</h1>
+      <div class="pill">
+        <button id="btnEdit" class="btn warn">Modo edição (arrastar)</button>
+        <button id="btnExport" class="btn">Exportar coords</button>
+        <button id="btnImport" class="btn">Importar coords</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <!-- Lado esquerdo: inputs e IA -->
+    <section class="card">
+      <h3>Template & PDF</h3>
+      <div class="body">
+        <label>Template (PNG/JPG)</label>
+        <input type="file" id="templateFile" accept="image/*">
+        <div class="muted">Pré-visualização aparece à direita.</div>
+
+        <label style="margin-top:14px">PDF do relatório</label>
+        <input type="file" id="pdfFile" accept="application/pdf">
+        <div class="btn-row">
+          <button class="btn ok" id="btnAi">Extrair com IA</button>
+          <span class="muted">ou cole abaixo o texto bruto (opcional)</span>
+        </div>
+        <label>Texto bruto (opcional)</label>
+        <textarea id="rawText" placeholder="Cole aqui o texto extraído do PDF"></textarea>
+
+        <div class="btn-row" style="margin-top:16px">
+          <button class="btn ok" id="btnGen">Gerar PNG</button>
+          <button class="btn" id="btnSavePng">Baixar PNG</button>
+          <button class="btn" id="btnSavePdf">Gerar PDF</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>Campos (valores)</h3>
+      <div class="body" id="fields"></div>
+    </section>
+
+    <!-- Direita: preview -->
+    <section class="stage card" style="grid-column:1 / -1">
+      <div class="toolbar">
+        <span class="badge">Template: <strong id="infoSize">—</strong></span>
+        <span class="badge">Fonte: <select id="fontSel">
+          <option value="16">16px</option>
+          <option value="18" selected>18px</option>
+          <option value="20">20px</option>
+        </select></span>
+        <span class="status" id="status">Pronto</span>
+      </div>
+      <div style="position:relative">
+        <canvas id="canvas"></canvas>
+        <!-- anchors serão criados via JS -->
+        <div id="anchors"></div>
+      </div>
+      <div class="body">
+        <details>
+          <summary>Debug de extração</summary>
+          <div id="debug" class="code"></div>
+        </details>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    /***********************
+     * Configuração básica *
+     ***********************/
+    const FIELD_NAMES = [
+      "well_name","kb_offset",
+      "casing_od","casing_id","casing_weight","casing_top","casing_bottom",
+      "tubing_od","tubing_id","tubing_weight","tubing_top","tubing_bottom","tubing_avg_joint_length",
+      "rod_string","tubing_anchor","pc_pump_depth",
+      "perforation_top","perforation_bottom","plugback"
+    ];
+
+    // coords padrão (x,y,w,h) relativos ao template 1024x1024 como exemplo
+    // ajuste livre — serve para você arrastar no modo edição e então exportar
+    let COORDS = {
+      well_name:[60,60,300,28],
+      kb_offset:[180,170,140,24],
+      // bloco casing (esquerda)
+      casing_od:[140,220,80,22],
+      casing_id:[140,248,80,22],
+      casing_weight:[140,276,80,22],
+      casing_top:[140,306,80,22],
+      casing_bottom:[140,334,80,22],
+      // bloco tubing (direita)
+      tubing_od:[670,220,80,22],
+      tubing_id:[670,248,80,22],
+      tubing_weight:[670,276,80,22],
+      tubing_top:[670,306,80,22],
+      tubing_bottom:[670,334,80,22],
+      tubing_avg_joint_length:[670,362,80,22],
+      // outros
+      rod_string:[120,390,120,22],
+      tubing_anchor:[160,560,120,22],
+      pc_pump_depth:[620,560,120,22],
+      perforation_top:[780,680,120,22],
+      perforation_bottom:[780,710,120,22],
+      plugback:[200,710,150,22]
+    };
+
+    // geramos inputs automaticamente
+    const fieldsDiv = document.getElementById("fields");
+    const NUM_BR = new RegExp('^\\s*[0-9]+(?:[\\.,][0-9]+)?\\s*$');
+    const form = {};
+    FIELD_NAMES.forEach(name=>{
+      const id = "f_" + name;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `<label>${name.replaceAll('_',' ')}</label><input id="${id}" type="text" placeholder="${name}">`;
+      fieldsDiv.appendChild(wrap);
+      form[name] = wrap.querySelector("input");
+      // aceita vírgula decimal — converte para ponto ao sair
+      form[name].addEventListener("blur", e=>{
+        let v = e.target.value.trim();
+        if(NUM_BR.test(v)) e.target.value = normalizeNumber(v);
+      });
+    });
+
+    function normalizeNumber(s){
+      return s.replace(/\.(?=\d{3}\b)/g,'').replace(',','.');
+    }
+    function denorm(s){ // volta para vírgula se quiser exibir
+      return (s||'').toString().replace('.',',');
+    }
+
+    /****************
+     * Canvas setup *
+     ****************/
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const templateFile = document.getElementById('templateFile');
+    const infoSize = document.getElementById('infoSize');
+    const statusEl = document.getElementById('status');
+    const anchorsLayer = document.getElementById('anchors');
+    const fontSel = document.getElementById('fontSel');
+    let templateImg = new Image();
+    let editMode = false;
+
+    templateFile.addEventListener('change', async e=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      templateImg = new Image();
+      templateImg.onload = ()=>{ fitCanvas(); render(); };
+      templateImg.src = URL.createObjectURL(file);
+    });
+
+    function fitCanvas(){
+      const maxW = canvas.parentElement.clientWidth;
+      const scale = Math.min(1, maxW / templateImg.naturalWidth);
+      canvas.width = templateImg.naturalWidth * scale;
+      canvas.height = templateImg.naturalHeight * scale;
+      infoSize.textContent = `${templateImg.naturalWidth}x${templateImg.naturalHeight}`;
+      anchorsLayer.style.position='absolute';
+      anchorsLayer.style.inset='0';
+      // redesenha anchors conforme escala
+      drawAnchors(scale);
+    }
+
+    function currentScale(){
+      return canvas.width / (templateImg.naturalWidth || 1024);
+    }
+
+    function render(){
+      if(!templateImg.complete || !templateImg.naturalWidth){
+        ctx.fillStyle = '#101735'; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = '#9fb0e6'; ctx.fillText('Carregue um template...', 16, 24);
+        return;
+      }
+      const sc = currentScale();
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(templateImg, 0,0, canvas.width, canvas.height);
+
+      ctx.fillStyle="#111a39aa";
+      ctx.fillRect(0,0,canvas.width,28);
+      ctx.fillStyle="#e7eeff";
+      ctx.font=`${fontSel.value}px/1.2 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+
+      // desenha valores
+      Object.entries(COORDS).forEach(([name,[x,y,w,h]])=>{
+        const val = form[name]?.value;
+        if(!val) return;
+        const sx = x*sc, sy=y*sc;
+        // caixa opcional de corte
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(sx, sy, w*sc, h*sc);
+        ctx.clip();
+        ctx.fillStyle="#e7eeff";
+        ctx.fillText(val, sx+2, sy + parseInt(fontSel.value,10));
+        ctx.restore();
+      });
+    }
+
+    fontSel.addEventListener('change', render);
+    window.addEventListener('resize', ()=>{ if(templateImg.naturalWidth) { fitCanvas(); render(); } });
+
+    /********************
+     * Edit mode/anchors
+     ********************/
+    const btnEdit = document.getElementById('btnEdit');
+    const btnExport = document.getElementById('btnExport');
+    const btnImport = document.getElementById('btnImport');
+
+    btnEdit.addEventListener('click', ()=>{
+      editMode = !editMode;
+      btnEdit.textContent = editMode ? "Sair do modo edição" : "Modo edição (arrastar)";
+      drawAnchors(currentScale());
+    });
+
+    btnExport.addEventListener('click', ()=>{
+      const blob = new Blob([JSON.stringify(COORDS,null,2)], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'template_coords.json';
+      a.click();
+    });
+
+    btnImport.addEventListener('click', async ()=>{
+      const inp = document.createElement('input');
+      inp.type='file'; inp.accept='application/json';
+      inp.onchange = async e=>{
+        const f = e.target.files[0]; if(!f) return;
+        const txt = await f.text();
+        try { COORDS = JSON.parse(txt); drawAnchors(currentScale()); render(); }
+        catch(err){ alert("JSON inválido."); }
+      };
+      inp.click();
+    });
+
+    function drawAnchors(scale){
+      anchorsLayer.innerHTML='';
+      if(!editMode) { anchorsLayer.classList.add('hidden'); return; }
+      anchorsLayer.classList.remove('hidden');
+      Object.entries(COORDS).forEach(([name, box])=>{
+        const [x,y,w,h] = box;
+        const el = document.createElement('div');
+        el.className='anchor';
+        el.style.left = (x*scale) + 'px';
+        el.style.top = (y*scale) + 'px';
+        el.style.width = (w*scale) + 'px';
+        el.style.height =(h*scale) + 'px';
+        el.innerHTML = `<span class="name">${name}</span><span class="xy"></span>`;
+        anchorsLayer.appendChild(el);
+
+        // drag
+        let dragging=false, sx=0, sy=0;
+        el.addEventListener('pointerdown', e=>{ dragging=true; sx=e.clientX; sy=e.clientY; el.setPointerCapture(e.pointerId);});
+        el.addEventListener('pointermove', e=>{
+          if(!dragging) return;
+          const dx=(e.clientX-sx), dy=(e.clientY-sy);
+          sx=e.clientX; sy=e.clientY;
+          const nx = parseFloat(el.style.left)+dx, ny=parseFloat(el.style.top)+dy;
+          el.style.left = nx+'px'; el.style.top = ny+'px';
+          // atualiza coords reais
+          const inv = 1/scale;
+          COORDS[name][0] = Math.round(nx*inv);
+          COORDS[name][1] = Math.round(ny*inv);
+          el.querySelector('.xy').textContent = `${COORDS[name][0]},${COORDS[name][1]}`;
+        });
+        el.addEventListener('pointerup', e=>{dragging=false;});
+      });
+    }
+
+    /*********************
+     * IA (api/ai_extract)
+     *********************/
+    const pdfFile = document.getElementById('pdfFile');
+    const rawText = document.getElementById('rawText');
+    const debugEl = document.getElementById('debug');
+    const btnAi = document.getElementById('btnAi');
+
+    btnAi.addEventListener('click', async ()=>{
+      status('Lendo PDF/Texto...');
+      let body = { provider:"regex" };
+      if(pdfFile.files[0]){
+        const b64 = await fileToBase64(pdfFile.files[0]);
+        body.pdf_base64 = b64;
+      } else if(rawText.value.trim()){
+        body.text = rawText.value;
+      } else {
+        alert("Selecione um PDF ou cole o texto.");
+        return;
+      }
+
+      try{
+        const r = await fetch("http://127.0.0.1:8000/api/ai_extract", {
+          method:"POST", headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+        });
+        const j = await r.json();
+        if(!j.ok) throw new Error(j.error || "Falha na extração");
+        applyValues(j.values);
+        debugEl.textContent = j.meta?.debug || "";
+        status('Valores extraídos');
+        render();
+      }catch(err){
+        console.error(err);
+        status('Falha na chamada /api/ai_extract: ' + err.message);
+      }
+    });
+
+    function applyValues(vals){
+      // mapeamento direto
+      for(const k of Object.keys(vals)){
+        if(form[k]) form[k].value = vals[k];
+      }
+      // garantias: 2,441 vira ID, não weight
+      if(form['tubing_weight'] && (form['tubing_weight'].value === '2,441' || form['tubing_weight'].value === '2.441')){
+        if(form['tubing_id'] && !form['tubing_id'].value) form['tubing_id'].value = form['tubing_weight'].value;
+        form['tubing_weight'].value = '';
+      }
+      // PC pump depth — se vier com vírgula mantém; normaliza para ponto ao sair
+      if(vals.pc_pump_depth && form['pc_pump_depth']) form['pc_pump_depth'].value = vals.pc_pump_depth.replace('.',',');
+    }
+
+    function fileToBase64(file){
+      return new Promise((resolve,reject)=>{
+        const rd = new FileReader();
+        rd.onload = ()=>resolve(rd.result);
+        rd.onerror = reject;
+        rd.readAsDataURL(file);
+      });
+    }
+
+    /*****************
+     * Geração imagem *
+     *****************/
+    const btnGen = document.getElementById('btnGen');
+    const btnSavePng = document.getElementById('btnSavePng');
+    const btnSavePdf = document.getElementById('btnSavePdf');
+
+    btnGen.addEventListener('click', ()=>{ render(); status('Imagem gerada.'); });
+    btnSavePng.addEventListener('click', ()=>{
+      render();
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = 'saida.png';
+      a.click();
+    });
+    btnSavePdf.addEventListener('click', async ()=>{
+      // simples: baixa a imagem; (PDF real exigiria jsPDF — fora do escopo core)
+      render();
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = 'saida_para_pdf.png';
+      a.click();
+      alert('Para PDF nativo, posso incluir jsPDF — me avise.');
+    });
+
+    function status(t){ statusEl.textContent = t; }
+
+    // render inicial
+    render();
+  </script>
+</body>
+</html>
