@@ -1,0 +1,102 @@
+
+from __future__ import annotations
+from flask import Blueprint, jsonify, request
+from pathlib import Path
+import os, logging
+
+from .config import settings
+from .services.pdf_reader import extract_text_from_pdf
+from .services.ai_extractor_v2 import extract_structured
+from .services.models import WellExtract
+
+bp_ai = Blueprint("ai", __name__, url_prefix="/api/ai")
+LOG = logging.getLogger(__name__)
+
+def _run_extraction(text: str, model: str) -> WellExtract:
+    return extract_structured(text, model=model)
+
+def _handle_request(model: str):
+    if request.is_json and isinstance(request.json, dict) and request.json.get("text"):
+        text = request.json["text"]
+        obj: WellExtract = _run_extraction(text, model)
+        return jsonify(model=model, data=obj.model_dump())
+
+    if "file" in request.files:
+        f = request.files["file"]
+        if not f.filename:
+            return jsonify(error="arquivo sem nome"), 400
+        if Path(f.filename).suffix.lower() != ".pdf":
+            return jsonify(error="envie um PDF"), 400
+
+        up = Path(settings.UPLOAD_DIR); up.mkdir(parents=True, exist_ok=True)
+        dst = up / Path(f.filename).name
+        f.save(dst)
+        LOG.info("PDF recebido: %s", dst)
+
+        text = extract_text_from_pdf(dst)
+        if not text:
+            return jsonify(error="PDF sem texto legível"), 422
+
+        obj: WellExtract = _run_extraction(text, model)
+        return jsonify(model=model, filename=dst.name, data=obj.model_dump())
+
+    return jsonify(error="Envie JSON {'text': ...} ou um arquivo 'file' (PDF)."), 400
+
+@bp_ai.post("/extract_v2")
+def extract_v2():
+    model = request.args.get("model") or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return _handle_request(model)
+
+# Compatibilidade com a versão antiga do frontend (/extract)
+@bp_ai.post("/extract")
+def extract_compat():
+    model = request.args.get("model") or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return _handle_request(model)
+
+from .services.pdf_reader import extract_text_from_pdf, extract_text_from_pdf_bytes
+
+@bp_ai.post("/extract_v2")
+def extract_v2():
+    model = request.args.get("model") or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    # JSON puro continua igual...
+    if request.is_json and isinstance(request.json, dict) and request.json.get("text"):
+        text = request.json["text"]
+        obj = extract_structured(text, model=model)
+        return jsonify(model=model, data=obj.model_dump())
+
+    # Upload de PDF
+    if "file" in request.files:
+        f = request.files["file"]
+        if not f.filename:
+            return jsonify(error="arquivo sem nome"), 400
+        if not f.filename.lower().endswith(".pdf"):
+            return jsonify(error="envie um PDF"), 400
+
+        # Tenta salvar em UPLOAD_DIR se existir; senão, processa em memória
+        upload_dir = os.getenv("UPLOAD_DIR")
+        text = ""
+        if upload_dir:
+            try:
+                Path(upload_dir).mkdir(parents=True, exist_ok=True)
+                dst = Path(upload_dir) / Path(f.filename).name
+                f.save(dst)
+                text = extract_text_from_pdf(dst)
+            except Exception as e:
+                # fallback: memória
+                current_app.logger.warning("Falha ao salvar em disco; usando memória. %s", e)
+                f.stream.seek(0)
+                pdf_bytes = f.read()
+                text = extract_text_from_pdf_bytes(pdf_bytes)
+        else:
+            pdf_bytes = f.read()
+            text = extract_text_from_pdf_bytes(pdf_bytes)
+
+        if not text:
+            return jsonify(error="PDF sem texto legível"), 422
+
+        obj = extract_structured(text, model=model)
+        return jsonify(model=model, filename=f.filename, data=obj.model_dump())
+
+    return jsonify(error="Envie JSON {'text': ...} ou um arquivo 'file' (PDF)."), 400
+
